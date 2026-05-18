@@ -1,11 +1,14 @@
 import streamlit as st
 import pandas as pd
 import requests
+import json
 
 st.set_page_config(page_title="Motorola Team Trivia", layout="centered")
 
-# Your Web App URL
-WEB_APP_URL = "https://script.google.com/a/macros/motorolasolutions.com/s/AKfycbw7SzMsNPz2bhH72fVkcUKnJdGm7ONTcm5hSuw9OB1iZT_x9dMigM9FbqcrAMJfMDUWjA/exec"
+# Securely grab database credentials from Streamlit Secrets
+UPSTASH_URL = st.secrets["UPSTASH_URL"]
+UPSTASH_TOKEN = st.secrets["UPSTASH_TOKEN"]
+HEADERS = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
 
 quiz_data = {
     "Q1: What year was Motorola Solutions founded?": [["1960", "1928", "1935", "1915"], "1928"],
@@ -23,7 +26,6 @@ quiz_data = {
 questions_list = list(quiz_data.keys())
 
 # --- SESSION STATE INITIALIZATION ---
-# This tracks where the user is in the flow
 if 'player_name' not in st.session_state:
     st.session_state.player_name = ""
 if 'current_q_index' not in st.session_state:
@@ -52,7 +54,6 @@ elif st.session_state.current_q_index < len(questions_list):
     st.write(f"👤 Playing as: **{st.session_state.player_name}** | Question {st.session_state.current_q_index + 1} of {len(questions_list)}")
     st.divider()
 
-    # If they haven't submitted an answer for this question yet
     if not st.session_state.answered_current:
         with st.form(key=f"form_{current_q}"):
             st.subheader(current_q)
@@ -68,29 +69,30 @@ elif st.session_state.current_q_index < len(questions_list):
                     "Who": st.session_state.player_name,
                     "Question": current_q,
                     "Answer": choice,
-                    "IsCorrect": is_correct,
                     "Points": 1 if is_correct else 0
                 }
                 
                 with st.spinner("Recording answer..."):
                     try:
-                        response = requests.post(WEB_APP_URL, json=payload)
+                        # Push the answer to our Upstash Redis list
+                        response = requests.post(
+                            f"{UPSTASH_URL}/lpush/trivia_answers", 
+                            headers=HEADERS, 
+                            data=json.dumps(payload)
+                        )
                         if response.status_code == 200:
-                            # Flag that the user has answered so we can show the "Next" button
                             st.session_state.answered_current = True
                             st.session_state.last_was_correct = is_correct
                             st.rerun()
                         else:
-                            st.error(f"Database error (Code: {response.status_code}). Please try again.")
+                            st.error("Failed to connect to the database. Try again.")
                     except Exception as e:
                         st.error(f"Error saving answer: {e}")
                         
-    # If they HAVE answered, show them the result and the "Next Question" button
     else:
         st.subheader(current_q)
         if st.session_state.last_was_correct:
             st.success(f"🎯 Correct! The answer was **{correct_answer}**.")
-            # Only trigger balloons on the first question to avoid spamming them every time
             if st.session_state.current_q_index == 0: 
                 st.balloons() 
         else:
@@ -108,30 +110,32 @@ else:
     st.divider()
     st.header("👑 Global Leaderboard")
     
-    with st.spinner("Fetching final scores..."):
+    with st.spinner("Fetching live scores..."):
         try:
-            response = requests.get(WEB_APP_URL)
-            data = response.json()
-            
-            if len(data) > 1:
-                # Convert list of lists to DataFrame
-                df = pd.DataFrame(data[1:], columns=data[0])
-                df['Points'] = pd.to_numeric(df['Points'])
+            # Get all answers from the Redis list
+            response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
+            if response.status_code == 200:
+                raw_data = response.json().get("result", [])
                 
-                # Group by Name and calculate total score
-                leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
-                
-                # Display table and chart
-                st.table(leaderboard.style.format({"Points": "{:.0f}"}))
-                
-                if not leaderboard.empty:
-                    winner = leaderboard.iloc[0]['Who']
-                    st.markdown(f"### 🏆 The Current Champion is **{winner}**! 🏆")
+                if raw_data:
+                    # Convert list of JSON strings back into Python dictionaries
+                    parsed_data = [json.loads(item) for item in raw_data]
+                    df = pd.DataFrame(parsed_data)
+                    
+                    # Group by Who and sum the points
+                    leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
+                    
+                    st.table(leaderboard.style.format({"Points": "{:.0f}"}))
+                    
+                    if not leaderboard.empty:
+                        winner = leaderboard.iloc[0]['Who']
+                        st.markdown(f"### 🏆 The Current Champion is **{winner}**! 🏆")
+                else:
+                    st.write("No scores found yet!")
             else:
-                st.write("No scores found!")
-                
+                st.error("Failed to fetch the leaderboard.")
         except Exception as e:
-            st.error("Couldn't load the leaderboard. Check your connection.")
+            st.error(f"Couldn't load the leaderboard. Check your connection. {e}")
             
     if st.button("Play Again (Restart)"):
         st.session_state.clear()
