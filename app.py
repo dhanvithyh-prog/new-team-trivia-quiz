@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import requests
 
-st.set_page_config(page_title="Motorola Team Trivia", layout="wide")
+st.set_page_config(page_title="Motorola Team Trivia", layout="centered")
 
-# Connect to your Google Apps Script Web App
+# Your Web App URL
 WEB_APP_URL = "https://script.google.com/a/macros/motorolasolutions.com/s/AKfycbw7SzMsNPz2bhH72fVkcUKnJdGm7ONTcm5hSuw9OB1iZT_x9dMigM9FbqcrAMJfMDUWjA/exec"
 
-# 1. Setup Questions + The Correct Answer
 quiz_data = {
     "Q1: What year was Motorola Solutions founded?": [["1960", "1928", "1935", "1915"], "1928"],
     "Q2: In the 1990s, Motorola introduced a communication device that became a massive pop culture phenomenon, eventually controlling 80% of the global market for this technology. What was it?": [["The Pager", "The Walkman", "The CB Radio", "The Fax Machine"], "The Pager"],
@@ -21,94 +20,119 @@ quiz_data = {
     "Q10: What is the official internal nickname for the iconic Motorola 'M' logo?": [["The Twin Peaks", "The Arch", "The Batwing", "The Sonic Wave"], "The Batwing"]
 }
 
-# Local state to prevent a user from spam-clicking submit on one question
-if 'answered_questions' not in st.session_state:
-    st.session_state.answered_questions = set()
+questions_list = list(quiz_data.keys())
 
-# 2. Sidebar: Identity & Navigation
-st.sidebar.title("👤 Player Info")
-user_name = st.sidebar.text_input("Enter your name:", key="user_name")
+# --- SESSION STATE INITIALIZATION ---
+# This tracks where the user is in the flow
+if 'player_name' not in st.session_state:
+    st.session_state.player_name = ""
+if 'current_q_index' not in st.session_state:
+    st.session_state.current_q_index = 0
+if 'answered_current' not in st.session_state:
+    st.session_state.answered_current = False
 
-st.sidebar.divider()
-current_q = st.sidebar.radio("Select Question:", list(quiz_data.keys()))
-
-# 3. Main Quiz Area
 st.title("🏆 Motorola Team Trivia")
 
-if not user_name:
-    st.warning("Please enter your name in the sidebar to join the game!")
-else:
+# --- SCREEN 1: LOGIN ---
+if not st.session_state.player_name:
+    st.write("Welcome to the challenge! Enter your name to begin.")
+    name_input = st.text_input("Your Name:")
+    if st.button("Start Game"):
+        if name_input.strip() != "":
+            st.session_state.player_name = name_input.strip()
+            st.rerun()
+        else:
+            st.warning("Please enter a valid name!")
+
+# --- SCREEN 2: ACTIVE QUIZ ---
+elif st.session_state.current_q_index < len(questions_list):
+    current_q = questions_list[st.session_state.current_q_index]
     options, correct_answer = quiz_data[current_q]
     
-    # Check if user already answered this in their current session
-    question_key = f"{user_name}_{current_q}"
-    
-    if question_key in st.session_state.answered_questions:
-        st.info("You have already answered this question! Head to the next one.")
-    else:
-        with st.form(key=f"form_{current_q}", clear_on_submit=False):
+    st.write(f"👤 Playing as: **{st.session_state.player_name}** | Question {st.session_state.current_q_index + 1} of {len(questions_list)}")
+    st.divider()
+
+    # If they haven't submitted an answer for this question yet
+    if not st.session_state.answered_current:
+        with st.form(key=f"form_{current_q}"):
             st.subheader(current_q)
-            choice = st.radio("Your Answer:", options)
-            submit = st.form_submit_button("Submit Answer")
+            choice = st.radio("Select your answer:", options, index=None)
+            submit = st.form_submit_button("Lock it in!")
 
         if submit:
-            is_correct = (choice == correct_answer)
-            
-            # Prepare the JSON payload to send to Google Sheets
-            payload = {
-                "Who": user_name,
-                "Question": current_q,
-                "Answer": choice,
-                "IsCorrect": is_correct,
-                "Points": 1 if is_correct else 0
-            }
-            
-            with st.spinner("Saving answer..."):
-                try:
-                    # POST request to Google Apps Script
-                    response = requests.post(WEB_APP_URL, json=payload)
-                    
-                    if response.status_code == 200:
-                        st.session_state.answered_questions.add(question_key)
-                        if is_correct:
-                            st.success("🎯 Correct!")
-                            st.balloons()
+            if choice is None:
+                st.warning("Please select an answer before submitting!")
+            else:
+                is_correct = (choice == correct_answer)
+                payload = {
+                    "Who": st.session_state.player_name,
+                    "Question": current_q,
+                    "Answer": choice,
+                    "IsCorrect": is_correct,
+                    "Points": 1 if is_correct else 0
+                }
+                
+                with st.spinner("Recording answer..."):
+                    try:
+                        response = requests.post(WEB_APP_URL, json=payload)
+                        if response.status_code == 200:
+                            # Flag that the user has answered so we can show the "Next" button
+                            st.session_state.answered_current = True
+                            st.session_state.last_was_correct = is_correct
+                            st.rerun()
                         else:
-                            st.error("❌ Not quite!")
-                    else:
-                        st.error("Database connection failed. Please try again.")
-                except Exception as e:
-                    st.error(f"Error saving answer: {e}")
+                            st.error(f"Database error (Code: {response.status_code}). Please try again.")
+                    except Exception as e:
+                        st.error(f"Error saving answer: {e}")
+                        
+    # If they HAVE answered, show them the result and the "Next Question" button
+    else:
+        st.subheader(current_q)
+        if st.session_state.last_was_correct:
+            st.success(f"🎯 Correct! The answer was **{correct_answer}**.")
+            # Only trigger balloons on the first question to avoid spamming them every time
+            if st.session_state.current_q_index == 0: 
+                st.balloons() 
+        else:
+            st.error(f"❌ Incorrect. The correct answer was **{correct_answer}**.")
+            
+        if st.button("Next Question ➡️", type="primary"):
+            st.session_state.current_q_index += 1
+            st.session_state.answered_current = False
+            st.rerun()
 
-# 4. LEADERBOARD (Now fetching globally from Google Sheets)
-st.sidebar.divider()
-if st.sidebar.button("📊 SHOW LEADERBOARD"):
+# --- SCREEN 3: END GAME / LEADERBOARD ---
+else:
+    st.success("🎉 You have completed the trivia!")
+    st.balloons()
+    st.divider()
     st.header("👑 Global Leaderboard")
     
-    with st.spinner("Fetching live scores..."):
+    with st.spinner("Fetching final scores..."):
         try:
-            # GET request to pull data from Google Sheets
             response = requests.get(WEB_APP_URL)
             data = response.json()
             
-            # data[0] contains the headers, data[1:] contains the rows
             if len(data) > 1:
+                # Convert list of lists to DataFrame
                 df = pd.DataFrame(data[1:], columns=data[0])
-                
-                # Ensure Points column is treated as numbers so we can sum it
                 df['Points'] = pd.to_numeric(df['Points'])
                 
-                # Group by Name and sum the points
+                # Group by Name and calculate total score
                 leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
                 
-                st.table(leaderboard)
-                st.bar_chart(leaderboard.set_index("Who"))
+                # Display table and chart
+                st.table(leaderboard.style.format({"Points": "{:.0f}"}))
                 
                 if not leaderboard.empty:
                     winner = leaderboard.iloc[0]['Who']
-                    st.markdown(f"## 🏆 The Current Leader is **{winner}**! 🏆")
+                    st.markdown(f"### 🏆 The Current Champion is **{winner}**! 🏆")
             else:
-                st.write("No scores recorded yet! Be the first to answer.")
+                st.write("No scores found!")
                 
         except Exception as e:
-            st.error("Couldn't load the leaderboard. Check your Web App URL permissions.")
+            st.error("Couldn't load the leaderboard. Check your connection.")
+            
+    if st.button("Play Again (Restart)"):
+        st.session_state.clear()
+        st.rerun()
