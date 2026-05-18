@@ -1,7 +1,11 @@
 import streamlit as st
 import pandas as pd
+import requests
 
 st.set_page_config(page_title="Motorola Team Trivia", layout="wide")
+
+# Connect to your Google Apps Script Web App
+WEB_APP_URL = "https://script.google.com/a/macros/motorolasolutions.com/s/AKfycbw7SzMsNPz2bhH72fVkcUKnJdGm7ONTcm5hSuw9OB1iZT_x9dMigM9FbqcrAMJfMDUWjA/exec"
 
 # 1. Setup Questions + The Correct Answer
 quiz_data = {
@@ -17,9 +21,7 @@ quiz_data = {
     "Q10: What is the official internal nickname for the iconic Motorola 'M' logo?": [["The Twin Peaks", "The Arch", "The Batwing", "The Sonic Wave"], "The Batwing"]
 }
 
-# Local state for testing (Needs DB for true multiplayer)
-if 'responses' not in st.session_state:
-    st.session_state.responses = []
+# Local state to prevent a user from spam-clicking submit on one question
 if 'answered_questions' not in st.session_state:
     st.session_state.answered_questions = set()
 
@@ -38,13 +40,13 @@ if not user_name:
 else:
     options, correct_answer = quiz_data[current_q]
     
-    # Check if user already answered this
+    # Check if user already answered this in their current session
     question_key = f"{user_name}_{current_q}"
     
     if question_key in st.session_state.answered_questions:
         st.info("You have already answered this question! Head to the next one.")
     else:
-        with st.form(key=f"form_{current_q}", clear_on_submit=True):
+        with st.form(key=f"form_{current_q}", clear_on_submit=False):
             st.subheader(current_q)
             choice = st.radio("Your Answer:", options)
             submit = st.form_submit_button("Submit Answer")
@@ -52,33 +54,61 @@ else:
         if submit:
             is_correct = (choice == correct_answer)
             
-            # Save the result
-            st.session_state.responses.append({
+            # Prepare the JSON payload to send to Google Sheets
+            payload = {
                 "Who": user_name,
                 "Question": current_q,
                 "Answer": choice,
-                "Is Correct": is_correct,
+                "IsCorrect": is_correct,
                 "Points": 1 if is_correct else 0
-            })
+            }
             
-            # Mark as answered to prevent spamming
-            st.session_state.answered_questions.add(question_key)
-            st.rerun() # Refresh to hide the form
+            with st.spinner("Saving answer..."):
+                try:
+                    # POST request to Google Apps Script
+                    response = requests.post(WEB_APP_URL, json=payload)
+                    
+                    if response.status_code == 200:
+                        st.session_state.answered_questions.add(question_key)
+                        if is_correct:
+                            st.success("🎯 Correct!")
+                            st.balloons()
+                        else:
+                            st.error("❌ Not quite!")
+                    else:
+                        st.error("Database connection failed. Please try again.")
+                except Exception as e:
+                    st.error(f"Error saving answer: {e}")
 
-# 4. LEADERBOARD
+# 4. LEADERBOARD (Now fetching globally from Google Sheets)
 st.sidebar.divider()
 if st.sidebar.button("📊 SHOW LEADERBOARD"):
-    st.header("👑 Current Leaderboard")
+    st.header("👑 Global Leaderboard")
     
-    if st.session_state.responses:
-        df = pd.DataFrame(st.session_state.responses)
-        leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
-        
-        st.table(leaderboard)
-        st.bar_chart(leaderboard.set_index("Who"))
-        
-        if not leaderboard.empty:
-            winner = leaderboard.iloc[0]['Who']
-            st.markdown(f"## 🏆 The Champion is **{winner}**! 🏆")
-    else:
-        st.write("No scores recorded yet!")
+    with st.spinner("Fetching live scores..."):
+        try:
+            # GET request to pull data from Google Sheets
+            response = requests.get(WEB_APP_URL)
+            data = response.json()
+            
+            # data[0] contains the headers, data[1:] contains the rows
+            if len(data) > 1:
+                df = pd.DataFrame(data[1:], columns=data[0])
+                
+                # Ensure Points column is treated as numbers so we can sum it
+                df['Points'] = pd.to_numeric(df['Points'])
+                
+                # Group by Name and sum the points
+                leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
+                
+                st.table(leaderboard)
+                st.bar_chart(leaderboard.set_index("Who"))
+                
+                if not leaderboard.empty:
+                    winner = leaderboard.iloc[0]['Who']
+                    st.markdown(f"## 🏆 The Current Leader is **{winner}**! 🏆")
+            else:
+                st.write("No scores recorded yet! Be the first to answer.")
+                
+        except Exception as e:
+            st.error("Couldn't load the leaderboard. Check your Web App URL permissions.")
