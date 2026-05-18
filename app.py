@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import json
 
-st.set_page_config(page_title="Motorola Team Trivia", layout="centered")
+st.set_page_config(page_title="SCT and RIA team Trivia", layout="centered")
 
 # Securely grab database credentials from Streamlit Secrets
 UPSTASH_URL = st.secrets["UPSTASH_URL"]
@@ -55,7 +55,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 Motorola Team Trivia")
+st.title("🏆 SCT and RIA team Trivia")
 
 # --- SCREEN 1: LOGIN ---
 if not st.session_state.player_name:
