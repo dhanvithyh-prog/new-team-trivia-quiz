@@ -32,6 +32,28 @@ if 'current_q_index' not in st.session_state:
     st.session_state.current_q_index = 0
 if 'answered_current' not in st.session_state:
     st.session_state.answered_current = False
+if 'triggered_balloons' not in st.session_state:
+    st.session_state.triggered_balloons = False
+
+# Custom CSS for UI animations and styling
+st.markdown("""
+    <style>
+    @keyframes pulse {
+        0% { transform: scale(1); text-shadow: 0 0 10px #FFD700; }
+        50% { transform: scale(1.05); text-shadow: 0 0 20px #FFD700, 0 0 30px #FF8C00; }
+        100% { transform: scale(1); text-shadow: 0 0 10px #FFD700; }
+    }
+    .champion-text {
+        animation: pulse 2s infinite;
+        color: #FFD700;
+        font-size: 2.5em;
+        font-weight: bold;
+        text-align: center;
+        margin-top: 20px;
+        margin-bottom: 20px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 st.title("🏆 Motorola Team Trivia")
 
@@ -52,6 +74,7 @@ elif st.session_state.current_q_index < len(questions_list):
     options, correct_answer = quiz_data[current_q]
     
     st.write(f"👤 Playing as: **{st.session_state.player_name}** | Question {st.session_state.current_q_index + 1} of {len(questions_list)}")
+    st.progress((st.session_state.current_q_index) / len(questions_list))
     st.divider()
 
     if not st.session_state.answered_current:
@@ -74,7 +97,6 @@ elif st.session_state.current_q_index < len(questions_list):
                 
                 with st.spinner("Recording answer..."):
                     try:
-                        # Push the answer to our Upstash Redis list
                         response = requests.post(
                             f"{UPSTASH_URL}/lpush/trivia_answers", 
                             headers=HEADERS, 
@@ -93,8 +115,6 @@ elif st.session_state.current_q_index < len(questions_list):
         st.subheader(current_q)
         if st.session_state.last_was_correct:
             st.success(f"🎯 Correct! The answer was **{correct_answer}**.")
-            if st.session_state.current_q_index == 0: 
-                st.balloons() 
         else:
             st.error(f"❌ Incorrect. The correct answer was **{correct_answer}**.")
             
@@ -105,38 +125,71 @@ elif st.session_state.current_q_index < len(questions_list):
 
 # --- SCREEN 3: END GAME / LEADERBOARD ---
 else:
+    if not st.session_state.triggered_balloons:
+        st.balloons()
+        st.session_state.triggered_balloons = True
+        
     st.success("🎉 You have completed the trivia!")
-    st.balloons()
     st.divider()
     st.header("👑 Global Leaderboard")
     
     with st.spinner("Fetching live scores..."):
         try:
-            # Get all answers from the Redis list
             response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
             if response.status_code == 200:
                 raw_data = response.json().get("result", [])
                 
                 if raw_data:
-                    # Convert list of JSON strings back into Python dictionaries
                     parsed_data = [json.loads(item) for item in raw_data]
                     df = pd.DataFrame(parsed_data)
                     
-                    # Group by Who and sum the points
+                    # Calculate Leaderboard
                     leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
                     
-                    st.table(leaderboard.style.format({"Points": "{:.0f}"}))
+                    # 1. Create Serial Numbers / Ranks (1, 2, 3...)
+                    leaderboard.index = leaderboard.index + 1
+                    leaderboard.reset_index(inplace=True)
+                    leaderboard.rename(columns={'index': 'Rank'}, inplace=True)
                     
+                    # 2. Add Medals for Top 3
+                    def get_medal(rank):
+                        if rank == 1: return "🥇 1"
+                        elif rank == 2: return "🥈 2"
+                        elif rank == 3: return "🥉 3"
+                        else: return str(rank)
+                        
+                    leaderboard['Rank'] = leaderboard['Rank'].apply(get_medal)
+                    leaderboard['Points'] = leaderboard['Points'].astype(int)
+                    
+                    # Announce Champion with CSS Animation
                     if not leaderboard.empty:
                         winner = leaderboard.iloc[0]['Who']
-                        st.markdown(f"### 🏆 The Current Champion is **{winner}**! 🏆")
+                        score = leaderboard.iloc[0]['Points']
+                        st.markdown(f"<div class='champion-text'>🏆 {winner} Wins ({score} pts)! 🏆</div>", unsafe_allow_html=True)
+                    
+                    # 3. Display beautiful dataframe without the default Pandas index
+                    st.dataframe(
+                        leaderboard, 
+                        hide_index=True, 
+                        use_container_width=True,
+                        column_config={
+                            "Rank": st.column_config.TextColumn("Rank", width="small"),
+                            "Who": st.column_config.TextColumn("Player Name", width="large"),
+                            "Points": st.column_config.NumberColumn("Total Score", format="%d", width="medium")
+                        }
+                    )
+                    
                 else:
-                    st.write("No scores found yet!")
+                    st.info("No scores found yet! Waiting for players to finish...")
             else:
                 st.error("Failed to fetch the leaderboard.")
         except Exception as e:
             st.error(f"Couldn't load the leaderboard. Check your connection. {e}")
             
+    st.divider()
+    if st.button("🔄 Refresh Leaderboard"):
+        st.rerun()
+        
     if st.button("Play Again (Restart)"):
         st.session_state.clear()
         st.rerun()
