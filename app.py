@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import json
 
-st.set_page_config(page_title="SCT and RIA team Trivia", layout="centered")
+st.set_page_config(page_title="Motorola Team Trivia", layout="centered")
 
 # Securely grab database credentials from Streamlit Secrets
 UPSTASH_URL = st.secrets["UPSTASH_URL"]
@@ -32,8 +32,6 @@ if 'current_q_index' not in st.session_state:
     st.session_state.current_q_index = 0
 if 'answered_current' not in st.session_state:
     st.session_state.answered_current = False
-if 'triggered_balloons' not in st.session_state:
-    st.session_state.triggered_balloons = False
 
 # Custom CSS for UI animations and styling
 st.markdown("""
@@ -55,7 +53,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 SCT and RIA team Trivia")
+st.title("🏆 Motorola Team Trivia")
 
 # --- SCREEN 1: LOGIN ---
 if not st.session_state.player_name:
@@ -125,10 +123,6 @@ elif st.session_state.current_q_index < len(questions_list):
 
 # --- SCREEN 3: END GAME / LEADERBOARD ---
 else:
-    if not st.session_state.triggered_balloons:
-        st.balloons()
-        st.session_state.triggered_balloons = True
-        
     st.success("🎉 You have completed the trivia!")
     st.divider()
     st.header("👑 Global Leaderboard")
