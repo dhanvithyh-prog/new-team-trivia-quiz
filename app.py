@@ -184,6 +184,7 @@ elif st.session_state.current_q_index < len(questions_list):
             st.rerun()
 
 # --- SCREEN 4: END GAME / LEADERBOARD ---
+# --- SCREEN 4: END GAME / LEADERBOARD ---
 else:
     st.title("🏆 SCT and RIA team Trivia")
     st.success("🎉 You have completed the trivia!")
@@ -203,30 +204,40 @@ else:
                     # Calculate Leaderboard
                     leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
                     
-                    # 1. Create Serial Numbers / Ranks (1, 2, 3...)
-                    leaderboard.index = leaderboard.index + 1
-                    leaderboard.reset_index(inplace=True)
-                    leaderboard.rename(columns={'index': 'Rank'}, inplace=True)
+                    # 1. Calculate TRUE mathematical ranks (this handles ties properly!)
+                    leaderboard['RankNum'] = leaderboard['Points'].rank(method='min', ascending=False).astype(int)
                     
-                    # 2. Add Medals for Top 3
+                    # 2. Add Medals based on true rank
                     def get_medal(rank):
                         if rank == 1: return "🥇 1"
                         elif rank == 2: return "🥈 2"
                         elif rank == 3: return "🥉 3"
                         else: return str(rank)
                         
-                    leaderboard['Rank'] = leaderboard['Rank'].apply(get_medal)
+                    leaderboard['Rank'] = leaderboard['RankNum'].apply(get_medal)
                     leaderboard['Points'] = leaderboard['Points'].astype(int)
                     
-                    # Announce Champion with CSS Animation
+                    # Announce Champion(s) with CSS Animation
                     if not leaderboard.empty:
-                        winner = leaderboard.iloc[0]['Who']
-                        score = leaderboard.iloc[0]['Points']
-                        st.markdown(f"<div class='champion-text'>🏆 {winner} Wins ({score} pts)! 🏆</div>", unsafe_allow_html=True)
+                        max_score = int(leaderboard['Points'].max())
+                        
+                        # Find EVERYONE who got the maximum score
+                        winners_list = leaderboard[leaderboard['Points'] == max_score]['Who'].tolist()
+                        
+                        if len(winners_list) > 1:
+                            # It's a tie! Join names together (e.g., "Dhanvith & Ram")
+                            winners_str = " & ".join(winners_list)
+                            st.markdown(f"<div class='champion-text'>🏆 TIE: {winners_str} Win ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
+                        else:
+                            # Solo winner
+                            winner = winners_list[0]
+                            st.markdown(f"<div class='champion-text'>🏆 {winner} Wins ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
                     
-                    # 3. Display beautiful dataframe without the default Pandas index
+                    # 3. Clean up the dataframe for display
+                    display_df = leaderboard[['Rank', 'Who', 'Points']]
+                    
                     st.dataframe(
-                        leaderboard, 
+                        display_df, 
                         hide_index=True, 
                         use_container_width=True,
                         column_config={
