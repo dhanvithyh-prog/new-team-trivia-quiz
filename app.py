@@ -24,6 +24,7 @@ quiz_data = {
 }
 
 questions_list = list(quiz_data.keys())
+TOTAL_Q = len(questions_list)
 
 # --- SESSION STATE INITIALIZATION ---
 if 'player_name' not in st.session_state:
@@ -32,8 +33,10 @@ if 'current_q_index' not in st.session_state:
     st.session_state.current_q_index = 0
 if 'answered_current' not in st.session_state:
     st.session_state.answered_current = False
+if 'is_admin' not in st.session_state:
+    st.session_state.is_admin = False
 
-# Custom CSS for UI animations and styling
+# Custom CSS
 st.markdown("""
     <style>
     @keyframes pulse {
@@ -53,21 +56,80 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 SCT and RIA team Trivia")
-
 # --- SCREEN 1: LOGIN ---
-if not st.session_state.player_name:
+if not st.session_state.player_name and not st.session_state.is_admin:
+    st.title("🏆 SCT and RIA team Trivia")
     st.write("Welcome to the challenge! Enter your name to begin.")
     name_input = st.text_input("Your Name:")
+    
     if st.button("Start Game"):
-        if name_input.strip() != "":
+        if name_input.strip() == "ADMIN_SCT":
+            st.session_state.is_admin = True
+            st.rerun()
+        elif name_input.strip() != "":
             st.session_state.player_name = name_input.strip()
             st.rerun()
         else:
             st.warning("Please enter a valid name!")
 
-# --- SCREEN 2: ACTIVE QUIZ ---
+# --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
+elif st.session_state.is_admin:
+    st.title("🎛️ Presenter Dashboard")
+    st.info("You are in Admin Mode. Your team cannot see this screen.")
+    
+    if st.button("🔄 Refresh Live Data", type="primary"):
+        st.rerun()
+        
+    st.divider()
+    
+    with st.spinner("Fetching live server data..."):
+        try:
+            response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
+            if response.status_code == 200:
+                raw_data = response.json().get("result", [])
+                
+                if raw_data:
+                    parsed_data = [json.loads(item) for item in raw_data]
+                    df = pd.DataFrame(parsed_data)
+                    
+                    # Group by player to get their current score and questions answered
+                    admin_board = df.groupby("Who").agg(
+                        Points=('Points', 'sum'),
+                        Questions_Answered=('Question', 'count')
+                    ).reset_index()
+                    
+                    admin_board = admin_board.sort_values(by="Points", ascending=False)
+                    
+                    # Top-level metrics
+                    total_players = len(admin_board)
+                    finished_players = len(admin_board[admin_board['Questions_Answered'] == TOTAL_Q])
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Active Players", total_players)
+                    col2.metric("Completed Quiz", f"{finished_players} / {total_players}")
+                    col3.metric("Total Answers Processed", len(df))
+                    
+                    st.subheader("Live Player Progress")
+                    
+                    # Format table for the admin
+                    admin_board['Points'] = admin_board['Points'].astype(int)
+                    admin_board['Progress'] = admin_board['Questions_Answered'].astype(str) + f" / {TOTAL_Q}"
+                    
+                    st.dataframe(
+                        admin_board[['Who', 'Progress', 'Points']], 
+                        hide_index=True, 
+                        use_container_width=True
+                    )
+                else:
+                    st.info("No one has submitted an answer yet. Waiting for players...")
+            else:
+                st.error("Failed to connect to the database.")
+        except Exception as e:
+            st.error(f"Error loading dashboard: {e}")
+
+# --- SCREEN 3: ACTIVE QUIZ ---
 elif st.session_state.current_q_index < len(questions_list):
+    st.title("🏆 SCT and RIA team Trivia")
     current_q = questions_list[st.session_state.current_q_index]
     options, correct_answer = quiz_data[current_q]
     
@@ -121,8 +183,9 @@ elif st.session_state.current_q_index < len(questions_list):
             st.session_state.answered_current = False
             st.rerun()
 
-# --- SCREEN 3: END GAME / LEADERBOARD ---
+# --- SCREEN 4: END GAME / LEADERBOARD ---
 else:
+    st.title("🏆 SCT and RIA team Trivia")
     st.success("🎉 You have completed the trivia!")
     st.divider()
     st.header("👑 Global Leaderboard")
