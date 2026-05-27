@@ -56,29 +56,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- SCREEN 1: LOGIN ---
-if not st.session_state.player_name and not st.session_state.is_admin:
-    st.title("🏆 SCT and RIA team Trivia")
-    st.write("Welcome to the challenge! Enter your name to begin.")
-    name_input = st.text_input("Your Name:")
-    
-    if st.button("Start Game"):
-        if name_input.strip() == "ADMIN_SCT":
-            st.session_state.is_admin = True
-            st.rerun()
-        elif name_input.strip() != "":
-            st.session_state.player_name = name_input.strip()
-            st.rerun()
-        else:
-            st.warning("Please enter a valid name!")
-
 # --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
 elif st.session_state.is_admin:
     st.title("🎛️ Presenter Dashboard")
     st.info("You are in Admin Mode. Your team cannot see this screen.")
     
-    if st.button("🔄 Refresh Live Data", type="primary"):
-        st.rerun()
+    col_btn1, col_btn2 = st.columns([3, 1])
+    with col_btn1:
+        st.markdown("### 📊 Live Event Status")
+    with col_btn2:
+        if st.button("🔄 Refresh Live Data", type="primary", use_container_width=True):
+            st.rerun()
         
     st.divider()
     
@@ -105,23 +93,52 @@ elif st.session_state.is_admin:
                     finished_players = len(admin_board[admin_board['Questions_Answered'] == TOTAL_Q])
                     
                     col1, col2, col3 = st.columns(3)
-                    col1.metric("Active Players", total_players)
-                    col2.metric("Completed Quiz", f"{finished_players} / {total_players}")
-                    col3.metric("Total Answers Processed", len(df))
+                    col1.metric("👥 Active Players", total_players)
+                    col2.metric("✅ Completed Quiz", f"{finished_players} / {total_players}")
+                    col3.metric("📥 Total Answers Processed", len(df))
                     
-                    st.subheader("Live Player Progress")
+                    st.divider()
+                    st.subheader("🚀 Live Player Progress")
                     
-                    # Format table for the admin
+                    # Format data for visual columns
                     admin_board['Points'] = admin_board['Points'].astype(int)
-                    admin_board['Progress'] = admin_board['Questions_Answered'].astype(str) + f" / {TOTAL_Q}"
+                    admin_board['Questions_Answered'] = admin_board['Questions_Answered'].astype(int)
                     
+                    # Upgraded Dataframe with visual progress bars
                     st.dataframe(
-                        admin_board[['Who', 'Progress', 'Points']], 
+                        admin_board, 
                         hide_index=True, 
-                        use_container_width=True
+                        use_container_width=True,
+                        column_config={
+                            "Who": st.column_config.TextColumn(
+                                "Player Name", 
+                                width="medium"
+                            ),
+                            "Questions_Answered": st.column_config.ProgressColumn(
+                                "Quiz Progress",
+                                help="How many questions they have answered",
+                                format="%d / 10",
+                                min_value=0,
+                                max_value=TOTAL_Q,
+                                width="large"
+                            ),
+                            "Points": st.column_config.NumberColumn(
+                                "Current Score",
+                                format="%d pts",
+                                width="small"
+                            )
+                        }
                     )
+                    
+                    st.divider()
+                    st.subheader("📈 Live Scoreboard Race")
+                    
+                    # Live bar chart
+                    chart_data = admin_board.set_index("Who")["Points"]
+                    st.bar_chart(chart_data, color="#FFD700")
+
                 else:
-                    st.info("No one has submitted an answer yet. Waiting for players...")
+                    st.info("No one has submitted an answer yet. Waiting for players to join the fray...")
             else:
                 st.error("Failed to connect to the database.")
         except Exception as e:
