@@ -11,7 +11,7 @@ st.set_page_config(page_title="SCT and RIA Teams Trivia", layout="wide")
 UPSTASH_URL = st.secrets["UPSTASH_URL"]
 UPSTASH_TOKEN = st.secrets["UPSTASH_TOKEN"]
 HEADERS = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-QUIZ_DURATION_SEC = 90  # 1.5 Minutes
+QUIZ_DURATION_SEC = 120  # 2 Minutes
 
 quiz_data = {
     "Q1: What year was Motorola Solutions founded?": [["1960", "1928", "1935", "1915"], "1928"],
@@ -56,9 +56,17 @@ def set_global_state(status, duration_sec):
     state = {"status": status, "end_time": end_time}
     requests.post(f"{UPSTASH_URL}/set/quiz_state", headers=HEADERS, data=json.dumps(state))
 
-# Custom CSS
+# Custom CSS & Anti Copy-Paste
 st.markdown("""
     <style>
+    /* ANTI COPY-PASTE SHIELD */
+    body, .stApp, .element-container, .stMarkdown, .stText, p, h1, h2, h3, h4, h5, h6, label {
+        user-select: none !important;
+        -webkit-user-select: none !important;
+        -ms-user-select: none !important;
+        -moz-user-select: none !important;
+    }
+    
     @keyframes pulse {
         0% { transform: scale(1); text-shadow: 0 0 10px #FFD700; }
         50% { transform: scale(1.05); text-shadow: 0 0 20px #FFD700, 0 0 30px #FF8C00; }
@@ -109,7 +117,7 @@ elif st.session_state.is_admin:
     
     with c1:
         if global_state["status"] == "waiting":
-            if st.button("🚀 RELEASE QUIZ (Start 1.5 Min)", type="primary", use_container_width=True):
+            if st.button("🚀 RELEASE QUIZ (Start 2 Min)", type="primary", use_container_width=True):
                 set_global_state("active", QUIZ_DURATION_SEC)
                 st.rerun()
         else:
@@ -191,9 +199,9 @@ elif st.session_state.is_admin:
         st.error(f"Error loading dashboard: {e}")
 
     # --- AUTO REFRESH LOGIC ---
-    # If the game is actively running, pause for 3 seconds then refresh the page
+    # If the game is actively running, pause for 2 seconds then refresh the page
     if global_state["status"] == "active" and time.time() < global_state["end_time"]:
-        time.sleep(3)
+        time.sleep(2)
         st.rerun()
 
 
