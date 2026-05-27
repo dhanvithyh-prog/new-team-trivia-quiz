@@ -58,16 +58,14 @@ st.markdown("""
 
 # --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
 elif st.session_state.is_admin:
-    st.title("🎛️ Presenter Dashboard")
+    st.title("🎛️ Presenter Live Command Center")
     st.info("You are in Admin Mode. Your team cannot see this screen.")
     
-    col_btn1, col_btn2 = st.columns([3, 1])
-    with col_btn1:
-        st.markdown("### 📊 Live Event Status")
-    with col_btn2:
+    col1, col2 = st.columns([8, 2])
+    with col2:
         if st.button("🔄 Refresh Live Data", type="primary", use_container_width=True):
             st.rerun()
-        
+            
     st.divider()
     
     with st.spinner("Fetching live server data..."):
@@ -80,7 +78,10 @@ elif st.session_state.is_admin:
                     parsed_data = [json.loads(item) for item in raw_data]
                     df = pd.DataFrame(parsed_data)
                     
-                    # Group by player to get their current score and questions answered
+                    # Force data types to ensure math works
+                    df['Points'] = pd.to_numeric(df['Points'], errors='coerce').fillna(0)
+                    
+                    # Group by player
                     admin_board = df.groupby("Who").agg(
                         Points=('Points', 'sum'),
                         Questions_Answered=('Question', 'count')
@@ -91,22 +92,32 @@ elif st.session_state.is_admin:
                     # Top-level metrics
                     total_players = len(admin_board)
                     finished_players = len(admin_board[admin_board['Questions_Answered'] == TOTAL_Q])
+                    total_answers = len(df)
                     
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("👥 Active Players", total_players)
-                    col2.metric("✅ Completed Quiz", f"{finished_players} / {total_players}")
-                    col3.metric("📥 Total Answers Processed", len(df))
+                    # Fancy Top Metrics
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("👥 Active Players", total_players)
+                    m2.metric("🏁 Completed Quiz", f"{finished_players} / {total_players}")
+                    m3.metric("📥 Total Answers Processed", total_answers)
                     
                     st.divider()
-                    st.subheader("🚀 Live Player Progress")
                     
-                    # Format data for visual columns
+                    # Visual Analytics Section
+                    st.subheader("📊 Live Score Visualization")
+                    
+                    # Bar chart for quick visual of the leaders
+                    chart_data = admin_board[['Who', 'Points']].set_index('Who')
+                    st.bar_chart(chart_data, color="#FFD700")
+                    
+                    st.subheader("🏃‍♂️ Detailed Player Tracking")
+                    
+                    # Prepare data for the enhanced table
                     admin_board['Points'] = admin_board['Points'].astype(int)
                     admin_board['Questions_Answered'] = admin_board['Questions_Answered'].astype(int)
                     
-                    # Upgraded Dataframe with visual progress bars
+                    # Display the enhanced dataframe with actual progress bars
                     st.dataframe(
-                        admin_board, 
+                        admin_board[['Who', 'Questions_Answered', 'Points']], 
                         hide_index=True, 
                         use_container_width=True,
                         column_config={
@@ -116,34 +127,25 @@ elif st.session_state.is_admin:
                             ),
                             "Questions_Answered": st.column_config.ProgressColumn(
                                 "Quiz Progress",
-                                help="How many questions they have answered",
-                                format="%d / 10",
+                                help="Visual indicator of how many questions they have answered out of 10",
+                                format="%d",
                                 min_value=0,
                                 max_value=TOTAL_Q,
-                                width="large"
                             ),
                             "Points": st.column_config.NumberColumn(
-                                "Current Score",
+                                "Current Score", 
                                 format="%d pts",
                                 width="small"
                             )
                         }
                     )
-                    
-                    st.divider()
-                    st.subheader("📈 Live Scoreboard Race")
-                    
-                    # Live bar chart
-                    chart_data = admin_board.set_index("Who")["Points"]
-                    st.bar_chart(chart_data, color="#FFD700")
-
                 else:
-                    st.info("No one has submitted an answer yet. Waiting for players to join the fray...")
+                    st.info("No one has submitted an answer yet. Waiting for players to join...")
             else:
                 st.error("Failed to connect to the database.")
         except Exception as e:
             st.error(f"Error loading dashboard: {e}")
-
+            
 # --- SCREEN 3: ACTIVE QUIZ ---
 elif st.session_state.current_q_index < len(questions_list):
     st.title("🏆 SCT and RIA team Trivia")
