@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import requests
 import json
+import time
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="SCT and RIA Teams Trivia", layout="centered")
 
@@ -9,6 +11,7 @@ st.set_page_config(page_title="SCT and RIA Teams Trivia", layout="centered")
 UPSTASH_URL = st.secrets["UPSTASH_URL"]
 UPSTASH_TOKEN = st.secrets["UPSTASH_TOKEN"]
 HEADERS = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+QUIZ_DURATION_SEC = 180  # 3 Minutes
 
 quiz_data = {
     "Q1: What year was Motorola Solutions founded?": [["1960", "1928", "1935", "1915"], "1928"],
@@ -36,6 +39,23 @@ if 'answered_current' not in st.session_state:
 if 'is_admin' not in st.session_state:
     st.session_state.is_admin = False
 
+# --- GLOBAL GAME STATE HELPERS ---
+def get_global_state():
+    try:
+        res = requests.get(f"{UPSTASH_URL}/get/quiz_state", headers=HEADERS)
+        if res.status_code == 200:
+            val = res.json().get("result")
+            if val:
+                return json.loads(val)
+    except Exception:
+        pass
+    return {"status": "waiting", "end_time": 0}
+
+def set_global_state(status, duration_sec):
+    end_time = time.time() + duration_sec if status == "active" else 0
+    state = {"status": status, "end_time": end_time}
+    requests.post(f"{UPSTASH_URL}/set/quiz_state", headers=HEADERS, data=json.dumps(state))
+
 # Custom CSS
 st.markdown("""
     <style>
@@ -56,13 +76,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+
 # --- SCREEN 1: LOGIN ---
 if not st.session_state.player_name and not st.session_state.is_admin:
     st.title("🏆 SCT and RIA Teams Trivia")
     st.write("Welcome to the challenge! Enter your name to begin.")
     name_input = st.text_input("Your Name:")
     
-    if st.button("Start Game"):
+    if st.button("Join Game"):
         if name_input.strip() == "ADMIN_SCT":
             st.session_state.is_admin = True
             st.rerun()
@@ -72,18 +93,45 @@ if not st.session_state.player_name and not st.session_state.is_admin:
         else:
             st.warning("Please enter a valid name!")
 
+
 # --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
 elif st.session_state.is_admin:
     st.title("🎛️ Presenter Live Command Center")
     st.info("You are in Admin Mode. Your team cannot see this screen.")
     
-    col1, col2 = st.columns([8, 2])
-    with col2:
-        if st.button("🔄 Refresh Live Data", type="primary", use_container_width=True):
+    global_state = get_global_state()
+    
+    # Game Controls
+    st.subheader("🎮 Master Game Controls")
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        if global_state["status"] == "waiting":
+            if st.button("🚀 RELEASE QUIZ (Start 3 Min)", type="primary", use_container_width=True):
+                set_global_state("active", QUIZ_DURATION_SEC)
+                st.rerun()
+        else:
+            time_left = max(0, int(global_state["end_time"] - time.time()))
+            st.warning(f"⏳ ACTIVE ({time_left}s left)")
+            if st.button("🛑 STOP / PAUSE QUIZ", type="primary", use_container_width=True):
+                set_global_state("waiting", 0)
+                st.rerun()
+                
+    with c2:
+        if st.button("🔄 Refresh Live Data", use_container_width=True):
             st.rerun()
             
+    with c3:
+        if st.button("☢️ Nuke Database (Reset All)", type="secondary", use_container_width=True):
+            requests.get(f"{UPSTASH_URL}/del/trivia_answers", headers=HEADERS)
+            set_global_state("waiting", 0)
+            st.success("Database Wiped!")
+            time.sleep(1)
+            st.rerun()
+
     st.divider()
     
+    # Analytics View
     with st.spinner("Fetching live server data..."):
         try:
             response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
@@ -93,211 +141,200 @@ elif st.session_state.is_admin:
                 if raw_data:
                     parsed_data = [json.loads(item) for item in raw_data]
                     df = pd.DataFrame(parsed_data)
-                    
-                    # Force data types to ensure math works
                     df['Points'] = pd.to_numeric(df['Points'], errors='coerce').fillna(0)
                     
-                    # Group by player
                     admin_board = df.groupby("Who").agg(
                         Points=('Points', 'sum'),
                         Questions_Answered=('Question', 'count')
                     ).reset_index()
-                    
                     admin_board = admin_board.sort_values(by="Points", ascending=False)
                     
-                    # Top-level metrics
                     total_players = len(admin_board)
                     finished_players = len(admin_board[admin_board['Questions_Answered'] == TOTAL_Q])
                     total_answers = len(df)
                     
-                    # Fancy Top Metrics
                     m1, m2, m3 = st.columns(3)
                     m1.metric("👥 Active Players", total_players)
                     m2.metric("🏁 Completed Quiz", f"{finished_players} / {total_players}")
                     m3.metric("📥 Total Answers Processed", total_answers)
                     
                     st.divider()
-                    
-                    # Visual Analytics Section
                     st.subheader("📊 Live Score Visualization")
-                    
-                    # Bar chart for quick visual of the leaders
                     chart_data = admin_board[['Who', 'Points']].set_index('Who')
                     st.bar_chart(chart_data, color="#FFD700")
                     
                     st.subheader("🏃‍♂️ Detailed Player Tracking")
-                    
-                    # Prepare data for the enhanced table
                     admin_board['Points'] = admin_board['Points'].astype(int)
                     admin_board['Questions_Answered'] = admin_board['Questions_Answered'].astype(int)
                     
-                    # Display the enhanced dataframe with actual progress bars
                     st.dataframe(
                         admin_board[['Who', 'Questions_Answered', 'Points']], 
                         hide_index=True, 
                         use_container_width=True,
                         column_config={
-                            "Who": st.column_config.TextColumn(
-                                "Player Name", 
-                                width="medium"
-                            ),
-                            "Questions_Answered": st.column_config.ProgressColumn(
-                                "Quiz Progress",
-                                help="Visual indicator of how many questions they have answered out of 10",
-                                format="%d",
-                                min_value=0,
-                                max_value=TOTAL_Q,
-                            ),
-                            "Points": st.column_config.NumberColumn(
-                                "Current Score", 
-                                format="%d pts",
-                                width="small"
-                            )
+                            "Who": st.column_config.TextColumn("Player Name", width="medium"),
+                            "Questions_Answered": st.column_config.ProgressColumn("Quiz Progress", format="%d", min_value=0, max_value=TOTAL_Q),
+                            "Points": st.column_config.NumberColumn("Current Score", format="%d pts", width="small")
                         }
                     )
                 else:
                     st.info("No one has submitted an answer yet. Waiting for players to join...")
-            else:
-                st.error("Failed to connect to the database.")
         except Exception as e:
             st.error(f"Error loading dashboard: {e}")
-            
-# --- SCREEN 3: ACTIVE QUIZ ---
-elif st.session_state.current_q_index < len(questions_list):
-    st.title("🏆 SCT and RIA Teams Trivia")
-    current_q = questions_list[st.session_state.current_q_index]
-    options, correct_answer = quiz_data[current_q]
-    
-    st.write(f"👤 Playing as: **{st.session_state.player_name}** | Question {st.session_state.current_q_index + 1} of {len(questions_list)}")
-    st.progress((st.session_state.current_q_index) / len(questions_list))
-    st.divider()
 
-    if not st.session_state.answered_current:
-        with st.form(key=f"form_{current_q}"):
-            st.subheader(current_q)
-            choice = st.radio("Select your answer:", options, index=None)
-            submit = st.form_submit_button("Lock it in!")
 
-        if submit:
-            if choice is None:
-                st.warning("Please select an answer before submitting!")
-            else:
-                is_correct = (choice == correct_answer)
-                payload = {
-                    "Who": st.session_state.player_name,
-                    "Question": current_q,
-                    "Answer": choice,
-                    "Points": 1 if is_correct else 0
-                }
-                
-                with st.spinner("Recording answer..."):
-                    try:
-                        response = requests.post(
-                            f"{UPSTASH_URL}/lpush/trivia_answers", 
-                            headers=HEADERS, 
-                            data=json.dumps(payload)
-                        )
-                        if response.status_code == 200:
-                            st.session_state.answered_current = True
-                            st.session_state.last_was_correct = is_correct
-                            st.rerun()
-                        else:
-                            st.error("Failed to connect to the database. Try again.")
-                    except Exception as e:
-                        st.error(f"Error saving answer: {e}")
-                        
-    else:
-        st.subheader(current_q)
-        if st.session_state.last_was_correct:
-            st.success(f"🎯 Correct! The answer was **{correct_answer}**.")
-        else:
-            st.error(f"❌ Incorrect. The correct answer was **{correct_answer}**.")
-            
-        if st.button("Next Question ➡️", type="primary"):
-            st.session_state.current_q_index += 1
-            st.session_state.answered_current = False
+# --- MAIN PLAYER FLOW ---
+else:
+    global_state = get_global_state()
+
+    # --- SCREEN 1.5: WAITING ROOM ---
+    if global_state["status"] == "waiting":
+        st.title("🏆 SCT and RIA Teams Trivia")
+        st.info("✋ **Waiting Room:** The host has not started the quiz yet.")
+        st.write("When the presenter says go, click the button below to join the live session!")
+        
+        if st.button("🔄 Check if Game Started", type="primary"):
             st.rerun()
 
-# --- SCREEN 4: END GAME / LEADERBOARD ---
-else:
-    st.title("🏆 SCT and RIA Teams Trivia")
-    st.success("🎉 You have completed the trivia!")
-    st.divider()
-    st.header("👑 Global Leaderboard")
-    
-    with st.spinner("Fetching live scores..."):
-        try:
-            response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
-            if response.status_code == 200:
-                raw_data = response.json().get("result", [])
-                
-                if raw_data:
-                    parsed_data = [json.loads(item) for item in raw_data]
-                    df = pd.DataFrame(parsed_data)
-                    
-                    # 1. CRITICAL FIX: Force points to be numbers BEFORE doing any math
-                    df['Points'] = pd.to_numeric(df['Points'], errors='coerce').fillna(0)
-                    
-                    # Calculate Leaderboard
-                    leaderboard = df.groupby("Who")["Points"].sum().reset_index()
-                    leaderboard = leaderboard.sort_values(by="Points", ascending=False).reset_index(drop=True)
-                    
-                    # 2. CRITICAL FIX: Use 'dense' ranking. 
-                    leaderboard['RankNum'] = leaderboard['Points'].rank(method='dense', ascending=False).astype(int)
-                    
-                    # 3. Add Medals based on true rank
-                    def get_medal(rank):
-                        if rank == 1: return "🥇 1"
-                        elif rank == 2: return "🥈 2"
-                        elif rank == 3: return "🥉 3"
-                        else: return str(rank)
-                        
-                    leaderboard['Rank'] = leaderboard['RankNum'].apply(get_medal)
-                    leaderboard['Points'] = leaderboard['Points'].astype(int)
-                    
-                    # Announce Champion(s) with CSS Animation
-                    if not leaderboard.empty:
-                        # Grab the absolute highest score on the board
-                        max_score = int(leaderboard['Points'].max())
-                        
-                        # Find EVERYONE who has that exact score
-                        winners_df = leaderboard[leaderboard['Points'] == max_score]
-                        winners_list = winners_df['Who'].tolist()
-                        
-                        if len(winners_list) > 1:
-                            # It's a tie! 
-                            winners_str = " & ".join(winners_list)
-                            st.markdown(f"<div class='champion-text'>🏆 TIE: {winners_str} Win ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
-                        else:
-                            # Solo winner
-                            winner = winners_list[0]
-                            st.markdown(f"<div class='champion-text'>🏆 {winner} Wins ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
-                    
-                    # Display beautiful dataframe without the default Pandas index
-                    display_df = leaderboard[['Rank', 'Who', 'Points']]
-                    
-                    st.dataframe(
-                        display_df, 
-                        hide_index=True, 
-                        use_container_width=True,
-                        column_config={
-                            "Rank": st.column_config.TextColumn("Rank", width="small"),
-                            "Who": st.column_config.TextColumn("Player Name", width="large"),
-                            "Points": st.column_config.NumberColumn("Total Score", format="%d", width="medium")
-                        }
-                    )
-                    
-                else:
-                    st.info("No scores found yet! Waiting for players to finish...")
-            else:
-                st.error("Failed to fetch the leaderboard.")
-        except Exception as e:
-            st.error(f"Couldn't load the leaderboard. Check your connection. {e}")
-            
-    st.divider()
-    if st.button("🔄 Refresh Leaderboard"):
-        st.rerun()
+    # --- SCREEN 3: ACTIVE QUIZ ---
+    elif global_state["status"] == "active" and time.time() < global_state["end_time"] and st.session_state.current_q_index < len(questions_list):
+        st.title("🏆 SCT and RIA Teams Trivia")
         
-    if st.button("Play Again (Restart)"):
-        st.session_state.clear()
-        st.rerun()
+        # Inject Live HTML Ticking Timer Component
+        end_time_ms = int(global_state["end_time"] * 1000)
+        components.html(f"""
+            <div id="timer" style="font-size: 20px; font-weight: bold; color: white; background-color: #E50914; text-align: center; font-family: sans-serif; padding: 10px; border-radius: 8px;">
+                Loading Time...
+            </div>
+            <script>
+            var countDownDate = {end_time_ms};
+            var x = setInterval(function() {{
+              var now = new Date().getTime();
+              var distance = countDownDate - now;
+              var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+              var seconds = Math.floor((distance % (1000 * 60)) / 1000);
+              document.getElementById("timer").innerHTML = "⏳ " + minutes + "m " + seconds + "s Remaining";
+              if (distance < 0) {{
+                clearInterval(x);
+                document.getElementById("timer").innerHTML = "🚨 TIME IS UP! 🚨";
+              }}
+            }}, 1000);
+            </script>
+        """, height=60)
+        
+        current_q = questions_list[st.session_state.current_q_index]
+        options, correct_answer = quiz_data[current_q]
+        
+        st.write(f"👤 Playing as: **{st.session_state.player_name}** | Question {st.session_state.current_q_index + 1} of {len(questions_list)}")
+        st.progress((st.session_state.current_q_index) / len(questions_list))
+        st.divider()
+
+        if not st.session_state.answered_current:
+            with st.form(key=f"form_{current_q}"):
+                st.subheader(current_q)
+                choice = st.radio("Select your answer:", options, index=None)
+                submit = st.form_submit_button("Lock it in!")
+
+            if submit:
+                # Backend Kill Switch: Ensure they didn't submit after the buzzer
+                if time.time() > global_state["end_time"]:
+                    st.error("🚨 BUZZER BEATER DENIED! Time expired.")
+                    time.sleep(2)
+                    st.rerun() # Will force them to the leaderboard
+                    
+                elif choice is None:
+                    st.warning("Please select an answer before submitting!")
+                else:
+                    is_correct = (choice == correct_answer)
+                    payload = {"Who": st.session_state.player_name, "Question": current_q, "Answer": choice, "Points": 1 if is_correct else 0}
+                    
+                    with st.spinner("Recording answer..."):
+                        try:
+                            response = requests.post(f"{UPSTASH_URL}/lpush/trivia_answers", headers=HEADERS, data=json.dumps(payload))
+                            if response.status_code == 200:
+                                st.session_state.answered_current = True
+                                st.session_state.last_was_correct = is_correct
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Error saving answer: {e}")
+                            
+        else:
+            st.subheader(current_q)
+            if st.session_state.last_was_correct:
+                st.success(f"🎯 Correct! The answer was **{correct_answer}**.")
+            else:
+                st.error(f"❌ Incorrect. The correct answer was **{correct_answer}**.")
+                
+            if st.button("Next Question ➡️", type="primary"):
+                st.session_state.current_q_index += 1
+                st.session_state.answered_current = False
+                st.rerun()
+
+    # --- SCREEN 4: END GAME / LEADERBOARD (Or Time Expired) ---
+    else:
+        st.title("🏆 SCT and RIA Teams Trivia")
+        
+        # Check if they got here because of the timer
+        if global_state["status"] == "active" and time.time() >= global_state["end_time"]:
+            st.error("🚨 TIME IS UP! Pencils down. Here is how everyone did.")
+        else:
+            st.success("🎉 You have completed the trivia!")
+            
+        st.divider()
+        st.header("👑 Global Leaderboard")
+        
+        with st.spinner("Fetching live scores..."):
+            try:
+                response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
+                if response.status_code == 200:
+                    raw_data = response.json().get("result", [])
+                    
+                    if raw_data:
+                        parsed_data = [json.loads(item) for item in raw_data]
+                        df = pd.DataFrame(parsed_data)
+                        df['Points'] = pd.to_numeric(df['Points'], errors='coerce').fillna(0)
+                        
+                        leaderboard = df.groupby("Who")["Points"].sum().reset_index()
+                        leaderboard = leaderboard.sort_values(by="Points", ascending=False).reset_index(drop=True)
+                        leaderboard['RankNum'] = leaderboard['Points'].rank(method='dense', ascending=False).astype(int)
+                        
+                        def get_medal(rank):
+                            if rank == 1: return "🥇 1"
+                            elif rank == 2: return "🥈 2"
+                            elif rank == 3: return "🥉 3"
+                            else: return str(rank)
+                            
+                        leaderboard['Rank'] = leaderboard['RankNum'].apply(get_medal)
+                        leaderboard['Points'] = leaderboard['Points'].astype(int)
+                        
+                        if not leaderboard.empty:
+                            max_score = int(leaderboard['Points'].max())
+                            winners_df = leaderboard[leaderboard['Points'] == max_score]
+                            winners_list = winners_df['Who'].tolist()
+                            
+                            if len(winners_list) > 1:
+                                winners_str = " & ".join(winners_list)
+                                st.markdown(f"<div class='champion-text'>🏆 TIE: {winners_str} Win ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
+                            else:
+                                winner = winners_list[0]
+                                st.markdown(f"<div class='champion-text'>🏆 {winner} Wins ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
+                        
+                        display_df = leaderboard[['Rank', 'Who', 'Points']]
+                        st.dataframe(
+                            display_df, 
+                            hide_index=True, 
+                            use_container_width=True,
+                            column_config={
+                                "Rank": st.column_config.TextColumn("Rank", width="small"),
+                                "Who": st.column_config.TextColumn("Player Name", width="large"),
+                                "Points": st.column_config.NumberColumn("Total Score", format="%d", width="medium")
+                            }
+                        )
+                    else:
+                        st.info("No scores found yet! Waiting for players to finish...")
+            except Exception as e:
+                st.error(f"Couldn't load the leaderboard. Check your connection. {e}")
+                
+        st.divider()
+        if st.button("🔄 Refresh Leaderboard"):
+            st.rerun()
