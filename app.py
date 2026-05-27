@@ -5,16 +5,13 @@ import json
 import time
 import streamlit.components.v1 as components
 
-# Using 'wide' layout helps the side-by-side dashboard look incredible on a laptop
 st.set_page_config(page_title="SCT and RIA Teams Trivia", layout="wide")
 
 # Securely grab database credentials from Streamlit Secrets
 UPSTASH_URL = st.secrets["UPSTASH_URL"]
 UPSTASH_TOKEN = st.secrets["UPSTASH_TOKEN"]
 HEADERS = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-
-# --- TIMER CHANGED TO 1.5 MINUTES (90 SECONDS) ---
-QUIZ_DURATION_SEC = 90  
+QUIZ_DURATION_SEC = 90  # 1.5 Minutes
 
 quiz_data = {
     "Q1: What year was Motorola Solutions founded?": [["1960", "1928", "1935", "1915"], "1928"],
@@ -76,14 +73,13 @@ st.markdown("""
         margin-top: 20px;
         margin-bottom: 20px;
     }
-    /* Restrict width for players on wide layout so reading isn't exhausting */
-    .stForm { max-width: 800px; margin: 0 auto; }
     </style>
 """, unsafe_allow_html=True)
 
 
 # --- SCREEN 1: LOGIN ---
 if not st.session_state.player_name and not st.session_state.is_admin:
+    # Center the login screen specifically
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.title("🏆 SCT and RIA Teams Trivia")
@@ -101,116 +97,114 @@ if not st.session_state.player_name and not st.session_state.is_admin:
                 st.warning("Please enter a valid name!")
 
 
-# --- SCREEN 2: PRESENTER DASHBOARD (LAPTOP OPTIMIZED) ---
+# --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
 elif st.session_state.is_admin:
-    st.title("🎛️ Presenter Command Center")
+    st.title("🎛️ Presenter Live Command Center")
+    st.info("You are in Admin Mode. Your team cannot see this screen.")
+    
     global_state = get_global_state()
     
-    with st.spinner("Fetching live server data..."):
-        try:
-            response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
-            if response.status_code == 200:
-                raw_data = response.json().get("result", [])
+    # Game Controls
+    c1, c2, c3 = st.columns([2, 1, 1])
+    
+    with c1:
+        if global_state["status"] == "waiting":
+            if st.button("🚀 RELEASE QUIZ (Start 1.5 Min)", type="primary", use_container_width=True):
+                set_global_state("active", QUIZ_DURATION_SEC)
+                st.rerun()
+        else:
+            time_left = max(0, int(global_state["end_time"] - time.time()))
+            st.warning(f"⏳ ACTIVE ({time_left}s left) - Auto-refreshing...")
+            if st.button("🛑 STOP / PAUSE QUIZ", type="primary", use_container_width=True):
+                set_global_state("waiting", 0)
+                st.rerun()
                 
-                # Pre-process data
-                df = pd.DataFrame()
-                if raw_data:
-                    parsed_data = [json.loads(item) for item in raw_data]
-                    df = pd.DataFrame(parsed_data)
-                    df['Points'] = pd.to_numeric(df['Points'], errors='coerce').fillna(0)
-                    
-                    admin_board = df.groupby("Who").agg(
-                        Points=('Points', 'sum'),
-                        Questions_Answered=('Question', 'count')
-                    ).reset_index().sort_values(by="Points", ascending=False)
-                    
-                    total_players = len(admin_board)
-                    finished_players = len(admin_board[admin_board['Questions_Answered'] == TOTAL_Q])
-                else:
-                    admin_board = pd.DataFrame()
-                    total_players = finished_players = 0
+    with c2:
+        if st.button("🔄 Manual Refresh", use_container_width=True):
+            st.rerun()
+            
+    with c3:
+        if st.button("☢️ Nuke Database", type="secondary", use_container_width=True):
+            requests.get(f"{UPSTASH_URL}/del/trivia_answers", headers=HEADERS)
+            set_global_state("waiting", 0)
+            st.success("Wiped!")
+            time.sleep(1)
+            st.rerun()
+
+    st.divider()
+    
+    # Analytics View
+    try:
+        response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
+        if response.status_code == 200:
+            raw_data = response.json().get("result", [])
+            
+            if raw_data:
+                parsed_data = [json.loads(item) for item in raw_data]
+                df = pd.DataFrame(parsed_data)
+                df['Points'] = pd.to_numeric(df['Points'], errors='coerce').fillna(0)
                 
+                admin_board = df.groupby("Who").agg(
+                    Points=('Points', 'sum'),
+                    Questions_Answered=('Question', 'count')
+                ).reset_index()
+                admin_board = admin_board.sort_values(by="Points", ascending=False)
+                
+                total_players = len(admin_board)
+                finished_players = len(admin_board[admin_board['Questions_Answered'] == TOTAL_Q])
                 total_answers = len(df)
                 
-                # --- ROW 1: METRICS ---
+                # Top Metrics
                 m1, m2, m3 = st.columns(3)
                 m1.metric("👥 Active Players", total_players)
-                m2.metric("🏁 Completed Quiz", f"{finished_players} / {max(1, total_players)}")
+                m2.metric("🏁 Completed Quiz", f"{finished_players} / {total_players}")
                 m3.metric("📥 Total Answers Processed", total_answers)
                 
                 st.divider()
                 
-                # --- ROW 2: MASTER CONTROLS ---
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    if global_state["status"] == "waiting":
-                        if st.button("🚀 RELEASE QUIZ (1.5 Min)", type="primary", use_container_width=True):
-                            set_global_state("active", QUIZ_DURATION_SEC)
-                            st.rerun()
-                    else:
-                        time_left = max(0, int(global_state["end_time"] - time.time()))
-                        st.warning(f"⏳ ACTIVE ({time_left}s left)")
-                        if st.button("🛑 STOP / PAUSE QUIZ", type="primary", use_container_width=True):
-                            set_global_state("waiting", 0)
-                            st.rerun()
-                            
-                with c2:
-                    if st.button("🔄 Refresh Live Data", use_container_width=True):
-                        st.rerun()
-                        
-                with c3:
-                    if st.button("☢️ Nuke Database (Reset All)", type="secondary", use_container_width=True):
-                        requests.get(f"{UPSTASH_URL}/del/trivia_answers", headers=HEADERS)
-                        set_global_state("waiting", 0)
-                        st.success("Database Wiped!")
-                        time.sleep(1)
-                        st.rerun()
-
-                st.divider()
-
-                # --- ROW 3: SIDE-BY-SIDE ANALYTICS (No Scrolling needed) ---
-                col_chart, col_table = st.columns(2)
+                # Widescreen Side-by-Side Layout
+                col_chart, col_table = st.columns([1, 1.5])
                 
                 with col_chart:
-                    st.markdown("### 📊 Live Score Visualization")
-                    if not admin_board.empty:
-                        chart_data = admin_board[['Who', 'Points']].set_index('Who')
-                        st.bar_chart(chart_data, color="#FFD700", height=300)
-                    else:
-                        st.info("Waiting for scores...")
-                        
+                    st.subheader("📊 Live Scores")
+                    chart_data = admin_board[['Who', 'Points']].set_index('Who')
+                    st.bar_chart(chart_data, color="#FFD700")
+                
                 with col_table:
-                    st.markdown("### 🏃‍♂️ Detailed Player Tracking")
-                    if not admin_board.empty:
-                        admin_board['Points'] = admin_board['Points'].astype(int)
-                        admin_board['Questions_Answered'] = admin_board['Questions_Answered'].astype(int)
-                        
-                        st.dataframe(
-                            admin_board[['Who', 'Questions_Answered', 'Points']], 
-                            hide_index=True, 
-                            use_container_width=True,
-                            height=300, # Keeps the table from pushing the screen down
-                            column_config={
-                                "Who": st.column_config.TextColumn("Player Name", width="small"),
-                                "Questions_Answered": st.column_config.ProgressColumn("Quiz Progress", format="%d", min_value=0, max_value=TOTAL_Q),
-                                "Points": st.column_config.NumberColumn("Score", format="%d pts", width="small")
-                            }
-                        )
-                    else:
-                        st.info("Waiting for data...")
-                        
-        except Exception as e:
-            st.error(f"Error loading dashboard: {e}")
+                    st.subheader("🏃‍♂️ Player Tracking")
+                    admin_board['Points'] = admin_board['Points'].astype(int)
+                    admin_board['Questions_Answered'] = admin_board['Questions_Answered'].astype(int)
+                    
+                    st.dataframe(
+                        admin_board[['Who', 'Questions_Answered', 'Points']], 
+                        hide_index=True, 
+                        use_container_width=True,
+                        column_config={
+                            "Who": st.column_config.TextColumn("Player Name", width="medium"),
+                            "Questions_Answered": st.column_config.ProgressColumn("Quiz Progress", format="%d", min_value=0, max_value=TOTAL_Q),
+                            "Points": st.column_config.NumberColumn("Current Score", format="%d pts", width="small")
+                        }
+                    )
+            else:
+                st.info("No one has submitted an answer yet. Waiting for players to join...")
+    except Exception as e:
+        st.error(f"Error loading dashboard: {e}")
+
+    # --- AUTO REFRESH LOGIC ---
+    # If the game is actively running, pause for 3 seconds then refresh the page
+    if global_state["status"] == "active" and time.time() < global_state["end_time"]:
+        time.sleep(3)
+        st.rerun()
 
 
 # --- MAIN PLAYER FLOW ---
 else:
-    global_state = get_global_state()
+    # Restrict player flow layout to centered for readability
+    col_center1, col_center2, col_center3 = st.columns([1, 3, 1])
     
-    # We restrict the width for the player view using columns so it doesn't stretch awkwardly on wide monitors
-    _, player_col, _ = st.columns([1, 2, 1])
-    
-    with player_col:
+    with col_center2:
+        global_state = get_global_state()
+
         # --- SCREEN 1.5: WAITING ROOM ---
         if global_state["status"] == "waiting":
             st.title("🏆 SCT and RIA Teams Trivia")
@@ -257,14 +251,14 @@ else:
                 with st.form(key=f"form_{current_q}"):
                     st.subheader(current_q)
                     choice = st.radio("Select your answer:", options, index=None)
-                    submit = st.form_submit_button("Lock it in!", use_container_width=True)
+                    submit = st.form_submit_button("Lock it in!")
 
                 if submit:
-                    # Backend Kill Switch
+                    # Backend Kill Switch: Ensure they didn't submit after the buzzer
                     if time.time() > global_state["end_time"]:
                         st.error("🚨 BUZZER BEATER DENIED! Time expired.")
                         time.sleep(2)
-                        st.rerun() 
+                        st.rerun() # Will force them to the leaderboard
                         
                     elif choice is None:
                         st.warning("Please select an answer before submitting!")
@@ -289,7 +283,7 @@ else:
                 else:
                     st.error(f"❌ Incorrect. The correct answer was **{correct_answer}**.")
                     
-                if st.button("Next Question ➡️", type="primary", use_container_width=True):
+                if st.button("Next Question ➡️", type="primary"):
                     st.session_state.current_q_index += 1
                     st.session_state.answered_current = False
                     st.rerun()
@@ -298,6 +292,7 @@ else:
         else:
             st.title("🏆 SCT and RIA Teams Trivia")
             
+            # Check if they got here because of the timer
             if global_state["status"] == "active" and time.time() >= global_state["end_time"]:
                 st.error("🚨 TIME IS UP! Pencils down. Here is how everyone did.")
             else:
