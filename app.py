@@ -56,6 +56,22 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- SCREEN 1: LOGIN ---
+if not st.session_state.player_name and not st.session_state.is_admin:
+    st.title("🏆 SCT and RIA Teams Trivia")
+    st.write("Welcome to the challenge! Enter your name to begin.")
+    name_input = st.text_input("Your Name:")
+    
+    if st.button("Start Game"):
+        if name_input.strip() == "ADMIN_SCT":
+            st.session_state.is_admin = True
+            st.rerun()
+        elif name_input.strip() != "":
+            st.session_state.player_name = name_input.strip()
+            st.rerun()
+        else:
+            st.warning("Please enter a valid name!")
+
 # --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
 elif st.session_state.is_admin:
     st.title("🎛️ Presenter Live Command Center")
@@ -148,7 +164,7 @@ elif st.session_state.is_admin:
             
 # --- SCREEN 3: ACTIVE QUIZ ---
 elif st.session_state.current_q_index < len(questions_list):
-    st.title("🏆 SCT and RIA team Trivia")
+    st.title("🏆 SCT and RIA Teams Trivia")
     current_q = questions_list[st.session_state.current_q_index]
     options, correct_answer = quiz_data[current_q]
     
@@ -204,7 +220,7 @@ elif st.session_state.current_q_index < len(questions_list):
 
 # --- SCREEN 4: END GAME / LEADERBOARD ---
 else:
-    st.title("🏆 SCT and RIA team Trivia")
+    st.title("🏆 SCT and RIA Teams Trivia")
     st.success("🎉 You have completed the trivia!")
     st.divider()
     st.header("👑 Global Leaderboard")
@@ -227,7 +243,6 @@ else:
                     leaderboard = leaderboard.sort_values(by="Points", ascending=False).reset_index(drop=True)
                     
                     # 2. CRITICAL FIX: Use 'dense' ranking. 
-                    # If scores are 8, 8, 7 -> Ranks will be 1, 1, 2 (No medals are skipped!)
                     leaderboard['RankNum'] = leaderboard['Points'].rank(method='dense', ascending=False).astype(int)
                     
                     # 3. Add Medals based on true rank
