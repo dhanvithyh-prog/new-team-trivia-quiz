@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import json
 
-st.set_page_config(page_title="SCT and RIA TEAM Trivia", layout="centered")
+st.set_page_config(page_title="SCT and RIA Teams Trivia", layout="centered")
 
 # Securely grab database credentials from Streamlit Secrets
 UPSTASH_URL = st.secrets["UPSTASH_URL"]
