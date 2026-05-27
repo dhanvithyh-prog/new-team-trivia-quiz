@@ -200,33 +200,50 @@ else:
                     parsed_data = [json.loads(item) for item in raw_data]
                     df = pd.DataFrame(parsed_data)
                     
+                    # 1. CRITICAL FIX: Force points to be numbers BEFORE doing any math
+                    df['Points'] = pd.to_numeric(df['Points'], errors='coerce').fillna(0)
+                    
                     # Calculate Leaderboard
-                    leaderboard = df.groupby("Who")["Points"].sum().sort_values(ascending=False).reset_index()
+                    leaderboard = df.groupby("Who")["Points"].sum().reset_index()
+                    leaderboard = leaderboard.sort_values(by="Points", ascending=False).reset_index(drop=True)
                     
-                    # 1. Create Serial Numbers / Ranks (1, 2, 3...)
-                    leaderboard.index = leaderboard.index + 1
-                    leaderboard.reset_index(inplace=True)
-                    leaderboard.rename(columns={'index': 'Rank'}, inplace=True)
+                    # 2. CRITICAL FIX: Use 'dense' ranking. 
+                    # If scores are 8, 8, 7 -> Ranks will be 1, 1, 2 (No medals are skipped!)
+                    leaderboard['RankNum'] = leaderboard['Points'].rank(method='dense', ascending=False).astype(int)
                     
-                    # 2. Add Medals for Top 3
+                    # 3. Add Medals based on true rank
                     def get_medal(rank):
                         if rank == 1: return "🥇 1"
                         elif rank == 2: return "🥈 2"
                         elif rank == 3: return "🥉 3"
                         else: return str(rank)
                         
-                    leaderboard['Rank'] = leaderboard['Rank'].apply(get_medal)
+                    leaderboard['Rank'] = leaderboard['RankNum'].apply(get_medal)
                     leaderboard['Points'] = leaderboard['Points'].astype(int)
                     
-                    # Announce Champion with CSS Animation
+                    # Announce Champion(s) with CSS Animation
                     if not leaderboard.empty:
-                        winner = leaderboard.iloc[0]['Who']
-                        score = leaderboard.iloc[0]['Points']
-                        st.markdown(f"<div class='champion-text'>🏆 {winner} Wins ({score} pts)! 🏆</div>", unsafe_allow_html=True)
+                        # Grab the absolute highest score on the board
+                        max_score = int(leaderboard['Points'].max())
+                        
+                        # Find EVERYONE who has that exact score
+                        winners_df = leaderboard[leaderboard['Points'] == max_score]
+                        winners_list = winners_df['Who'].tolist()
+                        
+                        if len(winners_list) > 1:
+                            # It's a tie! 
+                            winners_str = " & ".join(winners_list)
+                            st.markdown(f"<div class='champion-text'>🏆 TIE: {winners_str} Win ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
+                        else:
+                            # Solo winner
+                            winner = winners_list[0]
+                            st.markdown(f"<div class='champion-text'>🏆 {winner} Wins ({max_score} pts)! 🏆</div>", unsafe_allow_html=True)
                     
-                    # 3. Display beautiful dataframe without the default Pandas index
+                    # Display beautiful dataframe without the default Pandas index
+                    display_df = leaderboard[['Rank', 'Who', 'Points']]
+                    
                     st.dataframe(
-                        leaderboard, 
+                        display_df, 
                         hide_index=True, 
                         use_container_width=True,
                         column_config={
