@@ -113,7 +113,7 @@ if not st.session_state.player_name and not st.session_state.is_admin:
 # --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
 elif st.session_state.is_admin:
     st.title("🎛️ Presenter Live Command Center")
-    st.info("You are in Admin Mode. Your team cannot see this screen.")
+    st.info("Admin Mode.")
     
     global_state = get_global_state()
     
