@@ -100,6 +100,11 @@ if not st.session_state.player_name and not st.session_state.is_admin:
                 st.rerun()
             elif name_input.strip() != "":
                 st.session_state.player_name = name_input.strip()
+                # REGISTER PLAYER IN LOBBY DATABASE
+                try:
+                    requests.post(f"{UPSTASH_URL}/", headers=HEADERS, json=["SADD", "trivia_players", st.session_state.player_name])
+                except:
+                    pass
                 st.rerun()
             else:
                 st.warning("Please enter a valid name!")
@@ -134,6 +139,7 @@ elif st.session_state.is_admin:
     with c3:
         if st.button("☢️ Nuke Database", type="secondary", use_container_width=True):
             requests.get(f"{UPSTASH_URL}/del/trivia_answers", headers=HEADERS)
+            requests.get(f"{UPSTASH_URL}/del/trivia_players", headers=HEADERS) # Clear lobby too
             set_global_state("waiting", 0)
             st.success("Wiped!")
             time.sleep(1)
@@ -141,11 +147,28 @@ elif st.session_state.is_admin:
 
     st.divider()
     
+    # Fetch Lobby Players
+    try:
+        lobby_res = requests.post(f"{UPSTASH_URL}/", headers=HEADERS, json=["SMEMBERS", "trivia_players"])
+        lobby_players = lobby_res.json().get("result", []) if lobby_res.status_code == 200 else []
+        if not isinstance(lobby_players, list):
+            lobby_players = []
+    except:
+        lobby_players = []
+        
+    lobby_count = len(lobby_players)
+    
     # Analytics View
     try:
         response = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
         if response.status_code == 200:
             raw_data = response.json().get("result", [])
+            
+            # Setup default empty variables
+            total_players = 0
+            finished_players = 0
+            total_answers = 0
+            admin_board = pd.DataFrame()
             
             if raw_data:
                 parsed_data = [json.loads(item) for item in raw_data]
@@ -162,14 +185,15 @@ elif st.session_state.is_admin:
                 finished_players = len(admin_board[admin_board['Questions_Answered'] == TOTAL_Q])
                 total_answers = len(df)
                 
-                # Top Metrics
-                m1, m2, m3 = st.columns(3)
-                m1.metric("👥 Active Players", total_players)
-                m2.metric("🏁 Completed Quiz", f"{finished_players} / {total_players}")
-                m3.metric("📥 Total Answers Processed", total_answers)
-                
-                st.divider()
-                
+            # Top Metrics
+            m1, m2, m3 = st.columns(3)
+            m1.metric("👥 Total in Lobby", lobby_count)
+            m2.metric("📝 Active Players (Started)", total_players)
+            m3.metric("🏁 Completed Quiz", f"{finished_players} / {lobby_count if lobby_count > 0 else 1}")
+            
+            st.divider()
+            
+            if not admin_board.empty:
                 # Widescreen Side-by-Side Layout
                 col_chart, col_table = st.columns([1, 1.5])
                 
@@ -194,12 +218,17 @@ elif st.session_state.is_admin:
                         }
                     )
             else:
-                st.info("No one has submitted an answer yet. Waiting for players to join...")
+                st.info("Waiting for the quiz to begin...")
+                if lobby_count > 0:
+                    st.write("### 🟢 Players Currently in Lobby:")
+                    # Display names as nice interactive pills
+                    st.write(" • ".join([f"**{player}**" for player in lobby_players]))
+                else:
+                    st.write("No one has joined the lobby yet.")
     except Exception as e:
         st.error(f"Error loading dashboard: {e}")
 
     # --- AUTO REFRESH LOGIC ---
-    # If the game is actively running, pause for 2 seconds then refresh the page
     if global_state["status"] == "active" and time.time() < global_state["end_time"]:
         time.sleep(2)
         st.rerun()
@@ -216,7 +245,7 @@ else:
         # --- SCREEN 1.5: WAITING ROOM ---
         if global_state["status"] == "waiting":
             st.title("🏆 SCT and RIA Teams Trivia")
-            st.info("✋ **Waiting Room:** The host has not started the quiz yet.")
+            st.info(f"✋ **Waiting Room:** You are in! Waiting for the host to start.")
             st.write("When the presenter says go, click the button below to join the live session!")
             
             if st.button("🔄 Check if Game Started", type="primary", use_container_width=True):
@@ -262,11 +291,10 @@ else:
                     submit = st.form_submit_button("Lock it in!")
 
                 if submit:
-                    # Backend Kill Switch: Ensure they didn't submit after the buzzer
                     if time.time() > global_state["end_time"]:
                         st.error("🚨 BUZZER BEATER DENIED! Time expired.")
                         time.sleep(2)
-                        st.rerun() # Will force them to the leaderboard
+                        st.rerun() 
                         
                     elif choice is None:
                         st.warning("Please select an answer before submitting!")
@@ -300,7 +328,6 @@ else:
         else:
             st.title("🏆 SCT and RIA Teams Trivia")
             
-            # Check if they got here because of the timer
             if global_state["status"] == "active" and time.time() >= global_state["end_time"]:
                 st.error("🚨 TIME IS UP! Pencils down. Here is how everyone did.")
             else:
