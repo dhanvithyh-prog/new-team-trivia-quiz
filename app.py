@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 import json
 import time
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="SCT and RIA Teams Trivia", layout="wide")
 
@@ -11,7 +10,6 @@ st.set_page_config(page_title="SCT and RIA Teams Trivia", layout="wide")
 UPSTASH_URL = st.secrets["UPSTASH_URL"]
 UPSTASH_TOKEN = st.secrets["UPSTASH_TOKEN"]
 HEADERS = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-QUIZ_DURATION_SEC = 120  # 2 Minutes
 
 quiz_data = {
     "Q1: What year was Motorola Solutions founded?": [["1960", "1928", "1935", "1915"], "1928"],
@@ -38,23 +36,6 @@ if 'answered_current' not in st.session_state:
     st.session_state.answered_current = False
 if 'is_admin' not in st.session_state:
     st.session_state.is_admin = False
-
-# --- GLOBAL GAME STATE HELPERS ---
-def get_global_state():
-    try:
-        res = requests.get(f"{UPSTASH_URL}/get/quiz_state", headers=HEADERS)
-        if res.status_code == 200:
-            val = res.json().get("result")
-            if val:
-                return json.loads(val)
-    except Exception:
-        pass
-    return {"status": "waiting", "end_time": 0}
-
-def set_global_state(status, duration_sec):
-    end_time = time.time() + duration_sec if status == "active" else 0
-    state = {"status": status, "end_time": end_time}
-    requests.post(f"{UPSTASH_URL}/set/quiz_state", headers=HEADERS, data=json.dumps(state))
 
 # Custom CSS & Anti Copy-Paste
 st.markdown("""
@@ -87,7 +68,6 @@ st.markdown("""
 
 # --- SCREEN 1: LOGIN ---
 if not st.session_state.player_name and not st.session_state.is_admin:
-    # Center the login screen specifically
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.title("🏆 SCT and RIA Teams Trivia")
@@ -99,12 +79,29 @@ if not st.session_state.player_name and not st.session_state.is_admin:
                 st.session_state.is_admin = True
                 st.rerun()
             elif name_input.strip() != "":
-                st.session_state.player_name = name_input.strip()
-                # REGISTER PLAYER IN LOBBY DATABASE
+                user = name_input.strip()
+                st.session_state.player_name = user
+                
+                # Register player in database
                 try:
-                    requests.post(f"{UPSTASH_URL}/", headers=HEADERS, json=["SADD", "trivia_players", st.session_state.player_name])
+                    requests.post(f"{UPSTASH_URL}/", headers=HEADERS, json=["SADD", "trivia_players", user])
                 except:
                     pass
+                    
+                # RESUME FEATURE: Check database to see how many questions they already answered
+                with st.spinner("Checking your progress..."):
+                    try:
+                        res = requests.get(f"{UPSTASH_URL}/lrange/trivia_answers/0/-1", headers=HEADERS)
+                        if res.status_code == 200:
+                            raw_data = res.json().get("result", [])
+                            if raw_data:
+                                parsed = [json.loads(i) for i in raw_data]
+                                # Count answers belonging to this user
+                                user_answers = [a for a in parsed if a.get("Who") == user]
+                                st.session_state.current_q_index = len(user_answers)
+                    except:
+                        st.session_state.current_q_index = 0
+                        
                 st.rerun()
             else:
                 st.warning("Please enter a valid name!")
@@ -113,23 +110,13 @@ if not st.session_state.player_name and not st.session_state.is_admin:
 # --- SCREEN 2: PRESENTER DASHBOARD (SECRET BACKDOOR) ---
 elif st.session_state.is_admin:
     st.title("🎛️ Presenter Live Command Center")
-    
-    global_state = get_global_state()
+    st.info("You are in Admin Mode. The quiz is currently OPEN and self-paced for all players.")
     
     # Game Controls
     c1, c2, c3 = st.columns([2, 1, 1])
     
     with c1:
-        if global_state["status"] == "waiting":
-            if st.button("🚀 RELEASE QUIZ (Start 2 Min)", type="primary", use_container_width=True):
-                set_global_state("active", QUIZ_DURATION_SEC)
-                st.rerun()
-        else:
-            time_left = max(0, int(global_state["end_time"] - time.time()))
-            st.warning(f"⏳ ACTIVE ({time_left}s left) - Auto-refreshing...")
-            if st.button("🛑 STOP / PAUSE QUIZ", type="primary", use_container_width=True):
-                set_global_state("waiting", 0)
-                st.rerun()
+        auto_refresh = st.toggle("Enable Live Auto-Refresh (Every 5 seconds)", value=False)
                 
     with c2:
         if st.button("🔄 Manual Refresh", use_container_width=True):
@@ -138,15 +125,14 @@ elif st.session_state.is_admin:
     with c3:
         if st.button("☢️ Nuke Database", type="secondary", use_container_width=True):
             requests.get(f"{UPSTASH_URL}/del/trivia_answers", headers=HEADERS)
-            requests.get(f"{UPSTASH_URL}/del/trivia_players", headers=HEADERS) # Clear lobby too
-            set_global_state("waiting", 0)
+            requests.get(f"{UPSTASH_URL}/del/trivia_players", headers=HEADERS) 
             st.success("Wiped!")
             time.sleep(1)
             st.rerun()
 
     st.divider()
     
-    # Fetch Lobby Players
+    # Fetch Registered Players
     try:
         lobby_res = requests.post(f"{UPSTASH_URL}/", headers=HEADERS, json=["SMEMBERS", "trivia_players"])
         lobby_players = lobby_res.json().get("result", []) if lobby_res.status_code == 200 else []
@@ -163,7 +149,6 @@ elif st.session_state.is_admin:
         if response.status_code == 200:
             raw_data = response.json().get("result", [])
             
-            # Setup default empty variables
             total_players = 0
             finished_players = 0
             total_answers = 0
@@ -186,14 +171,13 @@ elif st.session_state.is_admin:
                 
             # Top Metrics
             m1, m2, m3 = st.columns(3)
-            m1.metric("👥 Total in Lobby", lobby_count)
+            m1.metric("👥 Total Players Registered", lobby_count)
             m2.metric("📝 Active Players (Started)", total_players)
             m3.metric("🏁 Completed Quiz", f"{finished_players} / {lobby_count if lobby_count > 0 else 1}")
             
             st.divider()
             
             if not admin_board.empty:
-                # Widescreen Side-by-Side Layout
                 col_chart, col_table = st.columns([1, 1.5])
                 
                 with col_chart:
@@ -217,64 +201,28 @@ elif st.session_state.is_admin:
                         }
                     )
             else:
-                st.info("Waiting for the quiz to begin...")
+                st.info("Waiting for players to start the quiz...")
                 if lobby_count > 0:
-                    st.write("### 🟢 Players Currently in Lobby:")
-                    # Display names as nice interactive pills
+                    st.write("### 🟢 Registered Players:")
                     st.write(" • ".join([f"**{player}**" for player in lobby_players]))
                 else:
-                    st.write("No one has joined the lobby yet.")
+                    st.write("No one has registered yet.")
     except Exception as e:
         st.error(f"Error loading dashboard: {e}")
 
-    # --- AUTO REFRESH LOGIC ---
-    if global_state["status"] == "active" and time.time() < global_state["end_time"]:
-        time.sleep(2)
+    if auto_refresh:
+        time.sleep(5)
         st.rerun()
 
 
 # --- MAIN PLAYER FLOW ---
 else:
-    # Restrict player flow layout to centered for readability
     col_center1, col_center2, col_center3 = st.columns([1, 3, 1])
     
     with col_center2:
-        global_state = get_global_state()
-
-        # --- SCREEN 1.5: WAITING ROOM ---
-        if global_state["status"] == "waiting":
-            st.title("🏆 SCT and RIA Teams Trivia")
-            st.info(f"✋ **Waiting Room:** You are in! Waiting for the host to start.")
-            st.write("When the presenter says go, click the button below to join the live session!")
-            
-            if st.button("🔄 Check if Game Started", type="primary", use_container_width=True):
-                st.rerun()
-
         # --- SCREEN 3: ACTIVE QUIZ ---
-        elif global_state["status"] == "active" and time.time() < global_state["end_time"] and st.session_state.current_q_index < len(questions_list):
+        if st.session_state.current_q_index < len(questions_list):
             st.title("🏆 SCT and RIA Teams Trivia")
-            
-            # Inject Live HTML Ticking Timer Component
-            end_time_ms = int(global_state["end_time"] * 1000)
-            components.html(f"""
-                <div id="timer" style="font-size: 20px; font-weight: bold; color: white; background-color: #E50914; text-align: center; font-family: sans-serif; padding: 10px; border-radius: 8px;">
-                    Loading Time...
-                </div>
-                <script>
-                var countDownDate = {end_time_ms};
-                var x = setInterval(function() {{
-                  var now = new Date().getTime();
-                  var distance = countDownDate - now;
-                  var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-                  var seconds = Math.floor((distance % (1000 * 60)) / 1000);
-                  document.getElementById("timer").innerHTML = "⏳ " + minutes + "m " + seconds + "s Remaining";
-                  if (distance < 0) {{
-                    clearInterval(x);
-                    document.getElementById("timer").innerHTML = "🚨 TIME IS UP! 🚨";
-                  }}
-                }}, 1000);
-                </script>
-            """, height=60)
             
             current_q = questions_list[st.session_state.current_q_index]
             options, correct_answer = quiz_data[current_q]
@@ -290,12 +238,7 @@ else:
                     submit = st.form_submit_button("Lock it in!")
 
                 if submit:
-                    if time.time() > global_state["end_time"]:
-                        st.error("🚨 BUZZER BEATER DENIED! Time expired.")
-                        time.sleep(2)
-                        st.rerun() 
-                        
-                    elif choice is None:
+                    if choice is None:
                         st.warning("Please select an answer before submitting!")
                     else:
                         is_correct = (choice == correct_answer)
@@ -323,14 +266,10 @@ else:
                     st.session_state.answered_current = False
                     st.rerun()
 
-        # --- SCREEN 4: END GAME / LEADERBOARD (Or Time Expired) ---
+        # --- SCREEN 4: END GAME / LEADERBOARD ---
         else:
             st.title("🏆 SCT and RIA Teams Trivia")
-            
-            if global_state["status"] == "active" and time.time() >= global_state["end_time"]:
-                st.error("🚨 TIME IS UP! Pencils down. Here is how everyone did.")
-            else:
-                st.success("🎉 You have completed the trivia!")
+            st.success("🎉 You have completed the trivia!")
                 
             st.divider()
             st.header("👑 Global Leaderboard")
